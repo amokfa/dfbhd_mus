@@ -61,7 +61,11 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
         .iter()
         .map(|index| {
             let (ident, suffix) = if index.ident[0] == 'm' as u8 {
-                (index.ident.iter().take_while(|&&b| b != 'a' as u8).map(|&b| b.to_owned()).collect::<Vec<_>>(), vec![])
+                let split_point = index.ident.iter().take_while(|&&b| b != 'a' as u8).count();
+                (
+                    index.ident.iter().take(split_point).map(|b| b.to_owned()).collect::<Vec<_>>(),
+                    index.ident.iter().skip(split_point).take_while(|&&b| b != 0).map(|b| b.to_owned()).collect::<Vec<_>>()
+                )
             } else {
                 let split_point = index.ident.iter().take_while(|b| b.is_ascii_alphabetic()).count();
                 (
@@ -165,7 +169,7 @@ struct SBFChunkData {
     size: u32,
     scale1: u8,
     scale2: u8,
-    scale3: u8,
-    scale4: u8,
+    two_fifty: u8,
+    zero: u8,
     content: [u8; 4096]
 }
