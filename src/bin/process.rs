@@ -54,16 +54,22 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
         // assert_eq!(e.z1, 0); // non zero for only one chunk (VALIANT0)
         assert_eq!(e.z2, 0);
         assert_eq!(e.z3, 0);
+        assert_eq!(e.block_size, 4104);
         assert_eq!(e.size % e.block_size, 0);
     });
     let index_parsed = index
         .iter()
         .map(|index| {
-            let split_point = index.ident.iter().take_while(|b| b.is_ascii_alphabetic()).count();
-            let ident = index.ident.iter().take(split_point).map(|b| b.to_owned()).collect::<Vec<_>>();
-            let suffix = index.ident.iter().skip(split_point).take_while(|&&b| b != 0).map(|b| b.to_owned()).collect::<Vec<_>>();
+            let (ident, suffix) = if index.ident[0] == 'm' as u8 {
+                (index.ident.iter().take_while(|&&b| b != 'a' as u8).map(|&b| b.to_owned()).collect::<Vec<_>>(), vec![])
+            } else {
+                let split_point = index.ident.iter().take_while(|b| b.is_ascii_alphabetic()).count();
+                (
+                 index.ident.iter().take(split_point).map(|b| b.to_owned()).collect::<Vec<_>>(),
+                 index.ident.iter().skip(split_point).take_while(|&&b| b != 0).map(|b| b.to_owned()).collect::<Vec<_>>()
+                )
+            };
             SBFIndexEntry {
-                full: String::from_utf8_lossy(index.ident.iter().take_while(|&&b| b != 0).map(|&b| b).collect::<Vec<_>>().as_slice()).to_string(),
                 ident: String::from_utf8_lossy(ident.as_slice()).to_string(),
                 suffix: String::from_utf8_lossy(suffix.as_slice()).to_string(),
                 z1: index.z1,
@@ -75,16 +81,17 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
             }
         })
         .collect::<Vec<_>>();
-    let g = index_parsed.into_iter()
+
+    let grouping = index_parsed.into_iter()
         .group_by(|index| index.ident.to_owned())
         .into_iter()
         .map(|(key, group)| (key, group.collect::<Vec<_>>()))
         .collect::<HashMap<_, _>>();
-    g.par_iter().for_each(|(prefix, es)| {
+    grouping.par_iter().for_each(|(prefix, es)| {
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
-            .open(output.join(prefix))
+            .open(output.join(format!("{prefix}.raw")))
             .unwrap();
         es.iter().map(|e| {
             process_chunk(&content[e.start as usize..(e.start + e.size) as usize]).unwrap()
@@ -94,8 +101,6 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
                 f.flush().unwrap();
             });
     });
-    // let e = index_parsed.iter().nth(2).unwrap().clone();
-    // std::fs::write("my.tmp.dir/parsed.raw", process_chunk(&content[e.start as usize..(e.start+e.size) as usize]).unwrap()).unwrap();
     Ok(())
 }
 
@@ -103,11 +108,12 @@ fn process_chunk(chunk: &[u8]) -> Result<Vec<u8>> {
     let mut parsed_data = vec![];
     for chunk in array_transmute::<_, SBFChunkData>(chunk) {
         assert_eq!(chunk.scale1, chunk.scale2);
-        for b in chunk.content {
-            parsed_data.push(upscale_pcm(b, chunk.scale1));
+        for &b in &chunk.content[0..chunk.size as usize] {
+            let bytes = upscale_pcm(b, chunk.scale1).to_le_bytes();
+            parsed_data.extend(bytes);
         }
     }
-    Ok(unsafe {std::mem::transmute(parsed_data)})
+    Ok(parsed_data)
 }
 
 fn upscale_pcm(b: u8, scale: u8) -> i16 {
@@ -143,7 +149,6 @@ struct SBFIndexEntryBin {
 
 #[derive(Debug, Clone)]
 struct SBFIndexEntry {
-    full: String,
     ident: String,
     suffix: String,
     z1: u32,
