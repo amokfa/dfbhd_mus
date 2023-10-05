@@ -5,12 +5,13 @@ use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use anyhow::{Result, Context};
-use itertools::Itertools;
+use itertools::{Itertools, repeat_n};
 use dfbhd_mus::*;
 use rayon::prelude::*;
+use dfbhd_mus::cmd::cmd;
 
 fn main() {
-    rayon::ThreadPoolBuilder::new().num_threads(32).build_global().unwrap();
+    rayon::ThreadPoolBuilder::new().num_threads(16).build_global().unwrap();
 
     let mut game_dir = None;
     let mut output_dir = None;
@@ -31,8 +32,10 @@ fn main() {
     }
     let game_dir = game_dir.unwrap();
     let output_dir = output_dir.unwrap();
-    let _ = std::fs::remove_dir_all(&output_dir);
-    std::fs::create_dir_all(&output_dir).unwrap();
+    let _ = std::fs::remove_dir_all(output_dir.join("raw"));
+    let _ = std::fs::remove_dir_all(output_dir.join("mp3"));
+    std::fs::create_dir_all(output_dir.join("raw")).unwrap();
+    std::fs::create_dir_all(output_dir.join("mp3")).unwrap();
     let files = [
         game_dir.join("menumus.sbf"),
         game_dir.join("gamemus.sbf"),
@@ -92,18 +95,22 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
         .map(|(key, group)| (key, group.collect::<Vec<_>>()))
         .collect::<HashMap<_, _>>();
     grouping.par_iter().for_each(|(prefix, es)| {
+        let raw_path = output.join("raw").join(format!("{prefix}.raw"));
+        let mp3_path = output.join("mp3").join(format!("{prefix}.mp3"));
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
-            .open(output.join(format!("{prefix}.raw")))
+            .open(&raw_path)
             .unwrap();
         es.iter().map(|e| {
             process_chunk(&content[e.start as usize..(e.start + e.size) as usize]).unwrap()
         })
             .for_each(|data| {
                 f.write_all(data.as_slice()).unwrap();
-                f.flush().unwrap();
             });
+        f.flush().unwrap();
+        drop(f);
+        cmd(&["ffmpeg", "-f", "s16le", "-ar", "22050", "-ac", "2", "-i", raw_path.to_str().unwrap(), "-acodec", "libmp3lame", mp3_path.to_str().unwrap()]).unwrap();
     });
     Ok(())
 }
@@ -121,11 +128,10 @@ fn process_chunk(chunk: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn upscale_pcm(b: u8, scale: u8) -> i16 {
-    let b = b as f32 - 127.5;
-    let b = b / 140.0;
-    let b = b * i16::MAX as f32;
-    let b = b as i16 / ((scale as i16).pow(2) + 1);
-    b / 2
+    let b = b as i16 - 128;
+    let b = b * 256;
+    let b = b / 2i16.pow(scale as u32);
+    b
 }
 
 #[repr(C)]

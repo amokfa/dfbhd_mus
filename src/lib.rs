@@ -1,3 +1,5 @@
+pub mod cmd;
+
 use std::mem::size_of;
 
 pub unsafe fn mm<T: ?Sized>(r : &T) -> &mut T {
