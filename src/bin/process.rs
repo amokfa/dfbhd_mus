@@ -2,10 +2,13 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::mem::size_of;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::ptr::null_mut;
 use std::str::FromStr;
 use anyhow::{Result, Context};
-use itertools::{Itertools, repeat_n};
+use itertools::Itertools;
+use libc::{MAP_PRIVATE, PROT_READ};
 use dfbhd_mus::*;
 use rayon::prelude::*;
 use dfbhd_mus::cmd::cmd;
@@ -49,8 +52,12 @@ fn main() {
 }
 
 fn process_file(file: &Path, output: &Path) -> Result<()> {
-    let file = unsafe { memmap::Mmap::map(&File::open(file).context(format!("couldn't open {file:?}"))?) }?;
-    let content = &file[..];
+    let content = unsafe {
+        let file = File::open(file).context(format!("couldn't open {file:?}"))?;
+        let size = file.metadata()?.len();
+        let ptr = libc::mmap(null_mut(), size as _, PROT_READ, MAP_PRIVATE, file.as_raw_fd(), 0);
+        std::slice::from_raw_parts(ptr as *const u8, size as _)
+    };
     let header: &[SBFHeader] = array_transmute(&content[0..size_of::<SBFHeader>()]);
     let index: &[SBFIndexEntryBin] = array_transmute(&content[header[0].index_offset as usize..(header[0].index_offset as usize + header[0].index_count as usize * size_of::<SBFIndexEntryBin>())]);
     index.iter().for_each(|e| {
@@ -102,29 +109,23 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
             .write(true)
             .open(&raw_path)
             .unwrap();
-        es.iter().map(|e| {
-            process_chunk(&content[e.start as usize..(e.start + e.size) as usize]).unwrap()
-        })
-            .for_each(|data| {
-                f.write_all(data.as_slice()).unwrap();
-            });
+        let mut parsed_data = arrayvec::ArrayVec::<_, 8192>::new();
+        for e in es.iter() {
+            let segment_blob = &content[e.start as usize..(e.start + e.size) as usize];
+            for chunk in array_transmute::<_, SBFChunkData>(segment_blob) {
+                parsed_data.clear();
+                for &b in &chunk.content[0..chunk.size as usize] {
+                    let bytes = upscale_pcm(b, chunk.scale1).to_le_bytes();
+                    parsed_data.extend(bytes);
+                }
+                f.write_all(parsed_data.as_slice()).unwrap();
+            }
+        }
         f.flush().unwrap();
         drop(f);
         cmd(&["ffmpeg", "-f", "s16le", "-ar", "22050", "-ac", "2", "-i", raw_path.to_str().unwrap(), "-acodec", "libmp3lame", mp3_path.to_str().unwrap()]).unwrap();
     });
     Ok(())
-}
-
-fn process_chunk(chunk: &[u8]) -> Result<Vec<u8>> {
-    let mut parsed_data = vec![];
-    for chunk in array_transmute::<_, SBFChunkData>(chunk) {
-        assert_eq!(chunk.scale1, chunk.scale2);
-        for &b in &chunk.content[0..chunk.size as usize] {
-            let bytes = upscale_pcm(b, chunk.scale1).to_le_bytes();
-            parsed_data.extend(bytes);
-        }
-    }
-    Ok(parsed_data)
 }
 
 fn upscale_pcm(b: u8, scale: u8) -> i16 {
@@ -145,6 +146,8 @@ struct SBFHeader {
     index_count: u32
 }
 
+// ....................................
+
 #[repr(C)]
 #[derive(Debug)]
 struct SBFIndexEntryBin {
@@ -153,10 +156,11 @@ struct SBFIndexEntryBin {
     z2: u32,
     start: u32,
     size: u32,
-    block_size: u32,
+    block_size: u32, // 4104 = 4096 + 8
     z3: u32,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct SBFIndexEntry {
     ident: String,
