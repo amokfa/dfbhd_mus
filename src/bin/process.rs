@@ -11,7 +11,6 @@ use itertools::Itertools;
 use libc::{MAP_PRIVATE, PROT_READ};
 use dfbhd_mus::*;
 use rayon::prelude::*;
-use dfbhd_mus::cmd::cmd;
 
 fn main() {
     rayon::ThreadPoolBuilder::new().num_threads(16).build_global().unwrap();
