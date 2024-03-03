@@ -35,10 +35,8 @@ fn main() {
     }
     let game_dir = game_dir.unwrap();
     let output_dir = output_dir.unwrap();
-    let _ = std::fs::remove_dir_all(output_dir.join("raw"));
-    let _ = std::fs::remove_dir_all(output_dir.join("mp3"));
-    std::fs::create_dir_all(output_dir.join("raw")).unwrap();
-    std::fs::create_dir_all(output_dir.join("mp3")).unwrap();
+    let _ = std::fs::remove_dir_all(output_dir.join("wav"));
+    std::fs::create_dir_all(output_dir.join("wav")).unwrap();
     let files = [
         game_dir.join("menumus.sbf"),
         game_dir.join("gamemus.sbf"),
@@ -102,13 +100,20 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
         .map(|(key, group)| (key, group.collect::<Vec<_>>()))
         .collect::<HashMap<_, _>>();
     grouping.par_iter().for_each(|(prefix, es)| {
-        let raw_path = output.join("raw").join(format!("{prefix}.raw"));
-        let mp3_path = output.join("mp3").join(format!("{prefix}.mp3"));
+        let wav_path = output.join("wav").join(format!("{prefix}.wav"));
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&raw_path)
+            .open(&wav_path)
             .unwrap();
+        let mut total_size = 0;
+        for e in es.iter() {
+            let segment_blob = &content[e.start as usize..(e.start + e.size) as usize];
+            for chunk in array_transmute::<_, SBFChunkData>(segment_blob) {
+                total_size += chunk.size * 2;
+            }
+        }
+        write_wav_header(&mut f, total_size).unwrap();
         let mut parsed_data = arrayvec::ArrayVec::<_, 8192>::new();
         for e in es.iter() {
             let segment_blob = &content[e.start as usize..(e.start + e.size) as usize];
@@ -122,16 +127,43 @@ fn process_file(file: &Path, output: &Path) -> Result<()> {
             }
         }
         f.flush().unwrap();
-        drop(f);
-        cmd(&["ffmpeg", "-f", "s16le", "-ar", "22050", "-ac", "2", "-i", raw_path.to_str().unwrap(), "-acodec", "libmp3lame", mp3_path.to_str().unwrap()]).unwrap();
     });
+    unsafe {
+        libc::munmap(content.as_ptr() as _, content.len());
+    }
+    Ok(())
+}
+
+fn write_wav_header(writer: &mut File, total_size: u32) -> Result<()> {
+    let num_channels: u16 = 2;
+    let bits_per_sample: u16 = 16;
+    let sample_rate: u32 = 22050;
+    let block_align = num_channels * (bits_per_sample / 8);
+    let byte_rate = sample_rate * u32::from(block_align);
+
+    writer.write_all(b"RIFF")?;
+    writer.write_all(&(36 + total_size).to_le_bytes())?;
+    writer.write_all(b"WAVE")?;
+
+    writer.write_all(b"fmt ")?;
+    writer.write_all(&16u32.to_le_bytes())?;
+    writer.write_all(&1u16.to_le_bytes())?;
+    writer.write_all(&num_channels.to_le_bytes())?;
+    writer.write_all(&sample_rate.to_le_bytes())?;
+    writer.write_all(&byte_rate.to_le_bytes())?;
+    writer.write_all(&block_align.to_le_bytes())?;
+    writer.write_all(&bits_per_sample.to_le_bytes())?;
+
+    writer.write_all(b"data")?;
+    writer.write_all(&total_size.to_le_bytes())?;
+
     Ok(())
 }
 
 fn upscale_pcm(b: u8, scale: u8) -> i16 {
     let b = b as i16 - 128;
     let b = b * 256;
-    let b = b / 2i16.pow(scale as u32);
+    let b = b / 2i16.pow(scale as u32) / 2;
     b
 }
 
