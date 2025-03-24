@@ -1,10 +1,13 @@
 pub mod cmd;
+pub mod sbf;
 
 use std::mem::size_of;
 
-pub unsafe fn mm<T: ?Sized>(r : &T) -> &mut T {
-    #[allow(mutable_transmutes)]
-    std::mem::transmute::<_, &mut T>(r)
+pub fn mm<T: ?Sized>(r : &T) -> &mut T {
+    unsafe {
+        #[allow(mutable_transmutes)]
+        std::mem::transmute::<_, &mut T>(r)
+    }
 }
 
 pub unsafe fn ms<T: ?Sized>(r : &T) -> &'static T {
