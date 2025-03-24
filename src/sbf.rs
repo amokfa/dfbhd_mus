@@ -158,12 +158,6 @@ pub fn process_file(file: &Path, output: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-const MARKA: [&str; 18] = [
-    "MARKA001", "MARKA002", "MARKA003", "MARKA004", "MARKA007", "MARKA008", "MARKA109", "MARKA110",
-    "MARKA111", "MARKA112", "MARKA113", "MARKA114", "MARKA115", "MARKA010", "MARKA011", "MARKA012",
-    "MARKA013", "MARKA116",
-];
-
 pub fn write_wav_header(writer: &mut File, total_size: u32) -> anyhow::Result<()> {
     let num_channels: u16 = 2;
     let bits_per_sample: u16 = 16;

@@ -1,25 +1,83 @@
-use std::io::Write;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use rodio::{OutputStream, Sink, Source};
 use rodio::source::SeekError;
-use dfbhd_mus::sbf::{upscale_pcm, write_wav_header, SBFChunkData, SBFIndexEntry, SBF};
+use dfbhd_mus::sbf::{upscale_pcm, SBFChunkData, SBFIndexEntry, SBF};
 use ncurses::*;
-use dfbhd_mus::array_transmute;
+use dfbhd_mus::{array_transmute, log};
 
 fn main() {
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-    let sink = Sink::try_new(&stream_handle).unwrap();
-
     let mut args = std::env::args();
     args.next();
+    let config_path = "reordering_config.json";
+    let mut config = serde_json::from_str::<PlayerConfig>(&std::fs::read_to_string(&config_path).unwrap_or("{}".to_string())).unwrap();
     let sbf = SBF::from_file(PathBuf::from(args.next().unwrap()).as_path()).unwrap();
-    dbg!(&sbf.chunks.keys());
-    let track_name = args.next().unwrap();
-    let output_dir = PathBuf::from(args.next().unwrap());
+    let mut tracks = sbf.chunks.keys().collect::<Vec<_>>();
+    tracks.sort();
+    nc_init();
 
-    let mut track = sbf.chunks.get(&track_name).unwrap().clone();
+    let mut screen = 0;
+    let mut selected_item = 0;
+    let mut track_name = "".to_owned();
+    loop {
+        match screen {
+            0 => {
+                track_name = select_track(&tracks, &mut selected_item);
+                screen = 1;
+            }
+            1 => {
+                edit_config(&mut config, &sbf, &track_name);
+                std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+                screen = 0;
+            }
+            _ => panic!("boo"),
+        }
+    }
+}
+
+fn select_track(options: &[&String], selected_item: &mut usize) -> String {
+    loop {
+        clear();
+        for (idx, item) in options.iter().enumerate() {
+            let attr_idx = if idx == *selected_item {
+                1
+            } else {
+                3
+            };
+            attron(COLOR_PAIR(attr_idx));
+            mvprintw(idx as _, 0, item).unwrap();
+            attroff(COLOR_PAIR(attr_idx));
+        }
+        refresh();
+        let ch = getch();
+        if ch == KEY_UP && *selected_item != 0 {
+            *selected_item -= 1;
+        } else if ch == KEY_DOWN && *selected_item != options.len() - 1 {
+            *selected_item += 1;
+        } else if ch == KEY_RIGHT {
+            return options.get(*selected_item).unwrap().to_string();
+        }
+    }
+}
+
+fn edit_config(config: &mut PlayerConfig, sbf: &SBF, track_name: &str) {
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+    let sink = Sink::try_new(&stream_handle).unwrap();
+    sink.pause();
+
+    let mut track = sbf.chunks.get(track_name).unwrap().clone();
+    if !config.contains_key(track_name) {
+        config.insert(track_name.to_owned(), track.iter().map(|ie| ie.suffix.to_owned()).collect());
+    }
+    let track_config = config.get(track_name).unwrap();
+    track.sort_by_key(|ie|
+            track_config.iter().enumerate()
+                .find(|(_, suffix)| *suffix == &ie.suffix )
+                .unwrap()
+                .0
+        );
     #[derive(Default)]
     struct ReorderedData {
         chunk_pcms: Vec<Vec<i16>>,
@@ -48,16 +106,15 @@ fn main() {
         }
     }
     let mut rd = ReorderedData::default();
-    rd.recalc(&track, &sbf);
-    let mut rd_dirty = false;
+    let mut rd_dirty = true;
     let mut selected_chunk = 0;
-    let mut playing_chunk = usize::MAX;
-    nc_init();
+    let mut playing_chunk;
     loop {
+        playing_chunk = usize::MAX;
         if !sink.is_paused() {
             let passed = sink.get_pos();
             playing_chunk = 0;
-            while playing_chunk < rd.chunk_offsets.len()-1 && rd.chunk_offsets[playing_chunk+1] < passed {
+            while playing_chunk < rd.chunk_offsets.len() - 1 && rd.chunk_offsets[playing_chunk + 1] < passed {
                 playing_chunk += 1;
             }
         }
@@ -83,23 +140,23 @@ fn main() {
         let ch = getch();
         if ch == KEY_UP && selected_chunk != 0 {
             selected_chunk -= 1;
-        } else if ch == KEY_DOWN && selected_chunk != track.len()-1 {
+        } else if ch == KEY_DOWN && selected_chunk != track.len() - 1 {
             selected_chunk += 1;
-        } else if ch == KEY_LEFT && selected_chunk != track.len()-1 {
-            let _ = sink.try_seek(sink.get_pos().checked_sub(Duration::from_secs(5)).unwrap_or(Duration::ZERO));
-        } else if ch == KEY_RIGHT && selected_chunk != track.len()-1 {
-            let _ = sink.try_seek(sink.get_pos() + Duration::from_secs(5));
-        } else if ch == 'w' as _ && selected_chunk != 0 {
+        } else if ch == 'a' as i32 && selected_chunk != track.len() - 1 {
+            let _ = sink.try_seek(sink.get_pos().checked_sub(Duration::from_secs(2)).unwrap_or(Duration::ZERO));
+        } else if ch == 'd' as i32 && selected_chunk != track.len() - 1 {
+            let _ = sink.try_seek(sink.get_pos() + Duration::from_secs(2));
+        } else if ch == 'w' as i32 && selected_chunk != 0 {
             let t = track.remove(selected_chunk);
-            track.insert(selected_chunk-1, t);
+            track.insert(selected_chunk - 1, t);
             selected_chunk -= 1;
             rd_dirty = true;
-        } else if ch == 's' as _ && selected_chunk != track.len()-1 {
+        } else if ch == 's' as i32 && selected_chunk != track.len() - 1 {
             let t = track.remove(selected_chunk);
-            track.insert(selected_chunk+1, t);
+            track.insert(selected_chunk + 1, t);
             selected_chunk += 1;
             rd_dirty = true;
-        } else if ch == 'q' as _ {
+        } else if ch == KEY_RIGHT {
             if rd_dirty {
                 rd.recalc(&track, &sbf);
                 rd_dirty = false;
@@ -123,30 +180,20 @@ fn main() {
                     .unwrap_or(Duration::ZERO)
             ).unwrap();
             sink.play();
-        } else if ch == 'a' as _ {
-            sink.stop();
-            sink.clear();
-            playing_chunk = usize::MAX;
-        } else if ch == 'e' as _ {
-            if rd_dirty {
-                rd.recalc(&track, &sbf);
-                rd_dirty = false;
+        } else if ch == KEY_LEFT {
+            if sink.is_paused() {
+                config.insert(track_name.to_owned(), track.iter().map(|ie| ie.suffix.to_owned()).collect());
+                return;
+            } else {
+                sink.pause();
             }
-
-            let mut samples = Vec::<i16>::with_capacity(1024 * 1024);
-            for chunk_pcm in &rd.chunk_pcms {
-                samples.extend(chunk_pcm);
-            }
-            let pcm_data = array_transmute::<_, u8>(&samples);
-            let wav_path = output_dir.join(format!("{track_name}.wav"));
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(&wav_path)
-                .unwrap();
-            write_wav_header(&mut f, pcm_data.len() as _).unwrap();
-            f.write_all(pcm_data).unwrap();
-            log(format!("exported to {:?}", wav_path));
+        } else if ch == 'e' as i32 {
+            let repr = serde_json::to_string(
+                &track.iter()
+                    .map(|ie| format!("{}{}", ie.ident, ie.suffix))
+                    .collect::<Vec<_>>()
+            ).unwrap();
+            log(format!("let {}: [&str; {}] = {};", track_name, track.len(), repr));
         }
     }
 }
@@ -160,7 +207,7 @@ fn nc_init() {
     cbreak();                // Disable line buffering
     noecho();                // Don't echo pressed keys to the screen
     keypad(stdscr(), true);  // Enable function keys and arrow keys
-    timeout(100);
+    timeout(16);
     start_color();
     init_pair(1, COLOR_RED, COLOR_BLACK);
     init_pair(2, COLOR_GREEN, COLOR_BLACK);
@@ -169,10 +216,6 @@ fn nc_init() {
     let mut max_y = 0;
     let mut max_x = 0;
     getmaxyx(stdscr(), &mut max_y, &mut max_x);
-}
-
-fn log(s: impl Into<String>) {
-    std::fs::write("/dev/pts/1", format!("{}\n", s.into())).unwrap()
 }
 
 struct RawPcmSource {
@@ -230,3 +273,5 @@ impl Source for RawPcmSource {
         Ok(())
     }
 }
+
+type PlayerConfig = HashMap<String, Vec<String>>;
