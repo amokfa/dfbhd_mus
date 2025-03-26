@@ -14,7 +14,8 @@ use crate::array_transmute;
 pub struct SBF {
     pub content: &'static [u8],
     pub header: SBFHeader,
-    pub chunks: HashMap<String, Vec<SBFIndexEntry>>,
+    pub chunks: Vec<SBFIndexEntry>,
+    pub grouped_chunks: HashMap<String, Vec<SBFIndexEntry>>,
 }
 
 impl SBF {
@@ -46,7 +47,7 @@ impl SBF {
             assert_eq!(e.block_size, 4104);
             assert_eq!(e.size % e.block_size, 0);
         });
-        let index_parsed = index
+        let chunks = index
             .iter()
             .map(|index| {
                 let (ident, suffix) = if index.ident[0] == 'm' as u8 {
@@ -101,8 +102,8 @@ impl SBF {
             })
             .collect::<Vec<_>>();
 
-        let chunks = index_parsed
-            .into_iter()
+        let grouped_chunks = chunks
+            .iter().cloned()
             .group_by(|index| index.ident.to_owned())
             .into_iter()
             .map(|(key, group)| (key, group.collect::<Vec<_>>()))
@@ -112,6 +113,7 @@ impl SBF {
             content,
             header,
             chunks,
+            grouped_chunks,
         })
     }
 }
@@ -126,7 +128,7 @@ impl Drop for SBF {
 
 pub fn process_file(file: &Path, output: &Path) -> anyhow::Result<()> {
     let sbf = SBF::from_file(file)?;
-    sbf.chunks.par_iter().for_each(|(prefix, es)| {
+    sbf.grouped_chunks.par_iter().for_each(|(prefix, es)| {
         let wav_path = output.join("wav").join(format!("{prefix}.wav"));
         let mut f = std::fs::OpenOptions::new()
             .create(true)

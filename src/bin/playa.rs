@@ -14,7 +14,7 @@ fn main() {
     let config_path = "reordering_config.json";
     let mut config = serde_json::from_str::<PlayerConfig>(&std::fs::read_to_string(&config_path).unwrap_or("{}".to_string())).unwrap();
     let sbf = SBF::from_file(PathBuf::from(args.next().unwrap()).as_path()).unwrap();
-    let mut tracks = sbf.chunks.keys().collect::<Vec<_>>();
+    let mut tracks = sbf.grouped_chunks.keys().collect::<Vec<_>>();
     tracks.sort();
     nc_init();
 
@@ -67,7 +67,7 @@ fn edit_config(config: &mut PlayerConfig, sbf: &SBF, track_name: &str) {
     let sink = Sink::try_new(&stream_handle).unwrap();
     sink.pause();
 
-    let mut track = sbf.chunks.get(track_name).unwrap().clone();
+    let mut track = sbf.grouped_chunks.get(track_name).unwrap().clone();
     if !config.contains_key(track_name) {
         config.insert(track_name.to_owned(), track.iter().map(|ie| ie.suffix.to_owned()).collect());
     }
