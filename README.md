@@ -1,12 +1,18 @@
 # Programs to decode SBF files from novalogix delta force games
 
+## [Docs](https://amokfa.github.io/posts/dfbhd_sbf.html)
+
+## [Outputs](https://amokfa.github.io/posts/dfbhd_mus.html)
+
+## Usage:
+
 ```
 cargo run --release --bin processor_1 -- --game-dir <game dir> --output-dir .
 ```
 A dumb processor that just groups tracks based on prefix.
 
 ```
-cargo run --release --bin playa -- --game-dir <game dir> --output-dir .
+cargo run --release --bin playa -- <sbf file>
 ```
 A program that can be used to reorder parts of a track so that they fit together better. It will save its config to `reordering_config.json`
 
